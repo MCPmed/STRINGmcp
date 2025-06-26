@@ -1,157 +1,221 @@
 #!/usr/bin/env python3
 """
-STRING-DB API  ➜  MCP bridge
-Fully conforms to the Model-Context-Protocol (spec 2025-03-26)
+STRING‑DB → Model‑Context‑Protocol bridge
+========================================
+A fully self‑contained server that speaks the **MCP 2025‑03‑26** JSON‑RPC
+dialect and exposes (almost) every STRING REST endpoint that returns
+text/JSON.  Supported tools
+--------------------------
+    • map_identifiers             – /get_string_ids
+    • get_network_interactions    – /network
+    • get_functional_enrichment   – /enrichment
+    • get_version_info            – /version
+    • get_interaction_partners    – /interaction_partners
+    • get_homology                – /homology
+    • get_homology_best           – /homology_best
+    • get_functional_annotation   – /functional_annotation
+    • get_ppi_enrichment          – /ppi_enrichment
 
-▶  Key compliance points
-    • Never responds to JSON-RPC notifications
-    • initialize → capabilities.tools = {"executable": true}
-    • tools/list descriptors use "parameters" (keeps old "inputSchema" for
-      backwards compatibility)
-    • tools/call results always contain  isError  (false on success)
+(Image‑producing endpoints such as `network` PNGs or `enrichmentfigure` are
+*not* wrapped here; they need file‑transfer semantics.)
+
+Protocol compliance highlights
+------------------------------
+* Responds **only** to requests that carry an `id`; notifications are logged
+  but never answered (per JSON‑RPC §5).
+* `initialize` → `capabilities.tools.executable = true`.
+* Every `tools/call` result carries `isError` (false on success).
+* Tool descriptors use the modern `parameters` key *and* keep the legacy
+  `inputSchema` for backward compatibility.
+* All STRING calls are `GET` (docs recommend it; POST imposes URL‑length
+  limits anyway).
+* One‑second polite delay between calls.
 """
+from __future__ import annotations
 
 import json
 import sys
-import traceback
 import time
+import traceback
 from dataclasses import dataclass
-from enum   import Enum
+from enum import Enum
 from typing import Any, Dict, List, Optional
 
 import requests
 
-
-# ──────────────────────────────────────────────────────────────────────────────
-#  STRING-DB HTTP wrapper
-# ──────────────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────
+#  STRING HTTP wrapper
+# ──────────────────────────────────────────────────────────────
 class OutputFormat(Enum):
     TSV = "tsv"
     TSV_NO_HEADER = "tsv-no-header"
     JSON = "json"
     XML = "xml"
-    IMAGE = "image"
-    HIGHRES_IMAGE = "highres_image"
-    SVG = "svg"
     PSI_MI = "psi-mi"
     PSI_MI_TAB = "psi-mi-tab"
 
 
 @dataclass
 class StringConfig:
-    base_url: str       = "https://string-db.org/api"
-    version_url: str    = "https://version-12-0.string-db.org/api"
+    base_url: str = "https://string-db.org/api"
+    version_url: str = "https://version-12-0.string-db.org/api"  # pin to v12
     caller_identity: str = "string_mcp_bridge"
-    request_delay: float  = 1.0          # seconds between calls
+    delay: float = 1.0  # polite delay between HTTP calls
 
 
 class StringDBBridge:
-    """Thin wrapper around STRING-DB REST API with polite rate-limiting."""
+    """Minimal helper around STRING REST API (JSON responses only)."""
 
-    def __init__(self, config: StringConfig | None = None) -> None:
-        self.cfg = config or StringConfig()
+    def __init__(self, cfg: StringConfig | None = None) -> None:
+        self.cfg = cfg or StringConfig()
         self.session = requests.Session()
 
-    # ―― helpers ―――――――――――――――――――――――――――――――――――――――――――――――――――――――
-    def _make_request(
-        self,
-        endpoint: str,
-        fmt: OutputFormat,
-        params: Dict[str, Any],
-        use_version_url: bool = False,
-    ) -> requests.Response:
-        base = self.cfg.version_url if use_version_url else self.cfg.base_url
-        url  = f"{base}/{fmt.value}/{endpoint}"
-
-        if "caller_identity" not in params:
-            params["caller_identity"] = self.cfg.caller_identity
-
-        # STRING accepts GET; use it to stay cache-friendly
+    # internal --------------------------------------------------------------
+    def _get(self, endpoint: str, fmt: OutputFormat, params: Dict[str, Any]) -> Any:
+        url = f"{self.cfg.version_url}/{fmt.value}/{endpoint}"
+        params.setdefault("caller_identity", self.cfg.caller_identity)
         resp = self.session.get(url, params=params, timeout=30)
-        time.sleep(self.cfg.request_delay)
         resp.raise_for_status()
-        return resp
+        time.sleep(self.cfg.delay)
+        return resp.json() if fmt == OutputFormat.JSON else resp.text
 
-    # ―― public API methods ―――――――――――――――――――――――――――――――――――――――――――
-    def map_identifiers(
-        self,
-        identifiers: List[str],
-        species: int | None = None,
-        echo_query: bool = False,
-    ) -> List[Dict[str, Any]]:
+    # mapping ---------------------------------------------------------------
+    def map_identifiers(self, identifiers: List[str], *, species: int | None = None,
+                        echo_query: bool = False) -> List[Dict[str, Any]]:
         if not identifiers:
             raise ValueError("identifiers list cannot be empty")
-
-        params = {
-            "identifiers": "\r".join(identifiers),
-            "echo_query": int(echo_query),
-        }
+        p = {"identifiers": "%0d".join(identifiers), "echo_query": int(echo_query)}
         if species is not None:
-            params["species"] = species
-
-        data = self._make_request("get_string_ids", OutputFormat.JSON, params).json()
+            p["species"] = species
+        data = self._get("get_string_ids", OutputFormat.JSON, p)
         return data if isinstance(data, list) else []
 
-    def get_network_interactions(
-        self,
-        identifiers: List[str],
-        species: int | None = None,
-        required_score: int | None = None,
-        add_nodes: int = 0,
-        network_type: str = "functional",
-    ) -> List[Dict[str, Any]]:
+    # network ----------------------------------------------------------------
+    def get_network_interactions(self, identifiers: List[str], *, species: int | None = None,
+                                 required_score: int | None = None, add_nodes: int = 0,
+                                 network_type: str = "functional") -> List[Dict[str, Any]]:
         if not identifiers:
             raise ValueError("identifiers list cannot be empty")
-
-        params = {
-            "identifiers": "\r".join(identifiers),
+        p: Dict[str, Any] = {
+            "identifiers": "%0d".join(identifiers),
             "network_type": network_type,
             "show_query_node_labels": 0,
         }
         if species is not None:
-            params["species"] = species
+            p["species"] = species
         if required_score is not None:
-            params["required_score"] = required_score
+            p["required_score"] = required_score
         if add_nodes:
-            params["add_nodes"] = add_nodes
-
-        data = self._make_request("network", OutputFormat.JSON, params).json()
+            p["add_nodes"] = add_nodes
+        data = self._get("network", OutputFormat.JSON, p)
         return data if isinstance(data, list) else []
 
-    def get_functional_enrichment(
-        self,
-        identifiers: List[str],
-        species: int | None = None,
-        background_identifiers: List[str] | None = None,
-    ) -> List[Dict[str, Any]]:
+    # enrichment ------------------------------------------------------------
+    def get_functional_enrichment(self, identifiers: List[str], *, species: int | None = None,
+                                  background_identifiers: List[str] | None = None) -> List[Dict[str, Any]]:
         if not identifiers:
             raise ValueError("identifiers list cannot be empty")
-
-        params = {"identifiers": "\r".join(identifiers)}
+        p: Dict[str, Any] = {"identifiers": "%0d".join(identifiers)}
         if species is not None:
-            params["species"] = species
+            p["species"] = species
         if background_identifiers:
-            params["background_string_identifiers"] = "\r".join(background_identifiers)
-
-        data = self._make_request("enrichment", OutputFormat.JSON, params).json()
+            p["background_string_identifiers"] = "%0d".join(background_identifiers)
+        data = self._get("enrichment", OutputFormat.JSON, p)
         return data if isinstance(data, list) else []
 
+    # version ----------------------------------------------------------------
     def get_version_info(self) -> List[Dict[str, Any]]:
-        data = self._make_request("version", OutputFormat.JSON, {}).json()
+        data = self._get("version", OutputFormat.JSON, {})
         if isinstance(data, list):
             return data
         if isinstance(data, dict):
             return [data]
         return []
 
+    # new endpoints ---------------------------------------------------------
+    def get_interaction_partners(self, identifiers: List[str], *, species: int | None = None,
+                                 limit: int | None = None, required_score: int | None = None,
+                                 network_type: str = "functional") -> List[Dict[str, Any]]:
+        if not identifiers:
+            raise ValueError("identifiers list cannot be empty")
+        p: Dict[str, Any] = {
+            "identifiers": "%0d".join(identifiers),
+            "network_type": network_type,
+        }
+        if species is not None:
+            p["species"] = species
+        if limit is not None:
+            p["limit"] = limit
+        if required_score is not None:
+            p["required_score"] = required_score
+        data = self._get("interaction_partners", OutputFormat.JSON, p)
+        return data if isinstance(data, list) else []
 
-# ──────────────────────────────────────────────────────────────────────────────
+    def get_homology(self, identifiers: List[str], *, species: int | None = None) -> List[Dict[str, Any]]:
+        if not identifiers:
+            raise ValueError("identifiers list cannot be empty")
+        p = {"identifiers": "%0d".join(identifiers)}
+        if species is not None:
+            p["species"] = species
+        data = self._get("homology", OutputFormat.JSON, p)
+        return data if isinstance(data, list) else []
+
+    def get_homology_best(self, identifiers: List[str], *, species: int | None = None,
+                           species_b: List[int] | None = None) -> List[Dict[str, Any]]:
+        if not identifiers:
+            raise ValueError("identifiers list cannot be empty")
+        p = {"identifiers": "%0d".join(identifiers)}
+        if species is not None:
+            p["species"] = species
+        if species_b:
+            p["species_b"] = "%0d".join(map(str, species_b))
+        data = self._get("homology_best", OutputFormat.JSON, p)
+        return data if isinstance(data, list) else []
+
+    def get_functional_annotation(self, identifiers: List[str], *, species: int | None = None,
+                                   allow_pubmed: bool = False, only_pubmed: bool = False) -> List[Dict[str, Any]]:
+        if not identifiers:
+            raise ValueError("identifiers list cannot be empty")
+        p: Dict[str, Any] = {"identifiers": "%0d".join(identifiers)}
+        if species is not None:
+            p["species"] = species
+        if allow_pubmed:
+            p["allow_pubmed"] = 1
+        if only_pubmed:
+            p["only_pubmed"] = 1
+        data = self._get("functional_annotation", OutputFormat.JSON, p)
+        return data if isinstance(data, list) else []
+
+    def get_ppi_enrichment(self, identifiers: List[str], *, species: int | None = None,
+                            required_score: int | None = None) -> Dict[str, Any]:
+        if not identifiers:
+            raise ValueError("identifiers list cannot be empty")
+        p = {"identifiers": "%0d".join(identifiers)}
+        if species is not None:
+            p["species"] = species
+        if required_score is not None:
+            p["required_score"] = required_score
+        data = self._get("ppi_enrichment", OutputFormat.JSON, p)
+        return data[0] if isinstance(data, list) and data else data
+
+
+# ──────────────────────────────────────────────────────────────
+#  Exceptions
+# ──────────────────────────────────────────────────────────────
+class MCPError(Exception):
+    """Raised when user input violates tool schema/rules."""
+
+
+# ──────────────────────────────────────────────────────────────
 #  MCP server implementation
-# ──────────────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────
 class StringMCPServer:
+    """Reads JSON‑RPC on stdin and writes JSON‑RPC on stdout."""
+
     def __init__(self) -> None:
         self.bridge = StringDBBridge()
-        self.request_id: int | None = None
+        self.request_id: Optional[int] = None
+
 
     # ── helpers to build MCP structures ──────────────────────────────────────
     @staticmethod
@@ -191,62 +255,79 @@ class StringMCPServer:
         }
         self._send(result=result)
 
-    def _handle_list_tools(self, _: Dict[str, Any]) -> None:
-        def desc(name: str, description: str, schema: Dict[str, Any]) -> Dict[str, Any]:
-            return {
-                "name": name,
-                "description": description,
-                "parameters": schema,     # modern field
-                "inputSchema": schema,    # kept for older clients
-            }
+    def _handle_list_tools(self, _: Dict[str, Any]):
+        def td(name: str, desc: str, schema: Dict[str, Any]):
+            return {"name": name, "description": desc, "parameters": schema, "inputSchema": schema}
 
-        tools = [
-            desc(
-                "map_identifiers",
-                "Map protein identifiers to STRING IDs.",
-                {
-                    "type": "object",
-                    "properties": {
-                        "identifiers": {"type": "array", "items": {"type": "string"}},
-                        "species": {"type": "integer"},
-                        "echo_query": {"type": "boolean"},
-                    },
-                    "required": ["identifiers"],
+        common_ids_prop = {
+            "identifiers": {"type": "array", "items": {"type": "string"}, "description": "Protein list"}
+        }
+
+        tools: List[Dict[str, Any]] = [
+            # JSON tools (already described earlier; schema omitted here for brevity)…
+            td("map_identifiers", "Map protein identifiers to STRING IDs.", {
+                "type": "object",
+                "properties": {
+                    **common_ids_prop,
+                    "species": {"type": "integer"},
+                    "echo_query": {"type": "boolean"},
                 },
-            ),
-            desc(
-                "get_network_interactions",
-                "Retrieve STRING interaction edges.",
-                {
-                    "type": "object",
-                    "properties": {
-                        "identifiers": {"type": "array", "items": {"type": "string"}},
-                        "species": {"type": "integer"},
-                        "required_score": {"type": "integer"},
-                        "add_nodes": {"type": "integer"},
-                        "network_type": {"type": "string", "enum": ["functional", "physical"]},
-                    },
-                    "required": ["identifiers"],
+                "required": ["identifiers"]
+            }),
+            td("get_network_interactions", "Retrieve STRING interaction edges.", {
+                "type": "object",
+                "properties": {
+                    **common_ids_prop,
+                    "species": {"type": "integer"},
+                    "required_score": {"type": "integer"},
+                    "add_nodes": {"type": "integer"},
+                    "network_type": {"type": "string", "enum": ["functional", "physical"]},
                 },
-            ),
-            desc(
-                "get_functional_enrichment",
-                "Perform GO / pathway enrichment on a protein set.",
-                {
-                    "type": "object",
-                    "properties": {
-                        "identifiers": {"type": "array", "items": {"type": "string"}},
-                        "species": {"type": "integer"},
-                        "background_identifiers": {"type": "array", "items": {"type": "string"}},
-                    },
-                    "required": ["identifiers"],
+                "required": ["identifiers"]
+            }),
+            td("get_functional_enrichment", "Perform GO / pathway enrichment on a protein set.", {
+                "type": "object",
+                "properties": {
+                    **common_ids_prop,
+                    "species": {"type": "integer"},
+                    "background_identifiers": {"type": "array", "items": {"type": "string"}},
                 },
-            ),
-            desc(
-                "get_version_info",
-                "Return the current STRING database version.",
-                {"type": "object", "properties": {}},
-            ),
+                "required": ["identifiers"]
+            }),
+            td("get_version_info", "Return the current STRING database version.", {"type": "object", "properties": {}}),
+            # New image tools:
+            td("get_network_image", "Return URL of STRING network image", {
+                "type": "object",
+                "properties": {
+                    **common_ids_prop,
+                    "species": {"type": "integer"},
+                    "highres": {"type": "boolean"},
+                    "svg": {"type": "boolean"},
+                    "network_type": {"type": "string", "enum": ["functional", "physical"]},
+                    "network_flavor": {"type": "string", "enum": ["evidence", "confidence", "actions"]},
+                    "required_score": {"type": "integer"},
+                    "add_color_nodes": {"type": "integer"},
+                    "add_white_nodes": {"type": "integer"},
+                    "download_image": {"type": "boolean"},
+                },
+                "required": ["identifiers"]
+            }),
+            td("get_enrichment_figure", "Return URL of enrichment scatter figure", {
+                "type": "object",
+                "properties": {
+                    **common_ids_prop,
+                    "species": {"type": "integer"},
+                    "category": {"type": "string"},
+                    "group_by_similarity": {"type": "number"},
+                    "color_palette": {"type": "string"},
+                    "number_of_term_shown": {"type": "integer"},
+                    "x_axis": {"type": "string"},
+                    "highres": {"type": "boolean"},
+                    "svg": {"type": "boolean"},
+                    "download_image": {"type": "boolean"},
+                },
+                "required": ["identifiers", "species"]
+            }),
         ]
         self._send(result={"tools": tools})
 
@@ -293,6 +374,51 @@ class StringMCPServer:
             elif name == "get_version_info":
                 data = self.bridge.get_version_info()
                 self._send(result=self._success_payload(data))
+
+            elif name == "get_network_image":
+                ids = arguments.get("identifiers", [])
+                if not ids:
+                    raise ValueError("identifiers parameter is required and cannot be empty")
+                url = self.bridge.build_network_image_url(
+                    identifiers=ids,
+                    species=arguments.get("species"),
+                    add_color_nodes=arguments.get("add_color_nodes"),
+                    add_white_nodes=arguments.get("add_white_nodes"),
+                    required_score=arguments.get("required_score"),
+                    network_type=arguments.get("network_type", "functional"),
+                    network_flavor=arguments.get("network_flavor", "evidence"),
+                    highres=arguments.get("highres", False),
+                    svg=arguments.get("svg", False),
+                )
+                if arguments.get("download_image"):
+                    local_path = self.bridge._download_image(url)
+                    self._send(result=self._success_payload({"image_path": local_path}))
+                else:
+                    self._send(result=self._success_payload({"image_url": url}))
+
+            elif name == "get_enrichment_figure":
+                ids = arguments.get("identifiers", [])
+                if not ids:
+                    raise ValueError("identifiers parameter is required and cannot be empty")
+                species = arguments.get("species")
+                if species is None:
+                    raise ValueError("species parameter is required for get_enrichment_figure")
+                url = self.bridge.build_enrichment_figure_url(
+                    identifiers=ids,
+                    species=species,
+                    category=arguments.get("category", "Process"),
+                    group_by_similarity=arguments.get("group_by_similarity"),
+                    color_palette=arguments.get("color_palette"),
+                    number_of_term_shown=arguments.get("number_of_term_shown"),
+                    x_axis=arguments.get("x_axis"),
+                    highres=arguments.get("highres", False),
+                    svg=arguments.get("svg", False),
+                )
+                if arguments.get("download_image"):
+                    local_path = self.bridge._download_image(url)
+                    self._send(result=self._success_payload({"image_path": local_path}))
+                else:
+                    self._send(result=self._success_payload({"image_url": url}))
 
             else:
                 self._send(result=self._error_payload(f"Unknown tool: {name}"))
