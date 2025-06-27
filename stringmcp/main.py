@@ -198,6 +198,97 @@ class StringDBBridge:
         data = self._get("ppi_enrichment", OutputFormat.JSON, p)
         return data[0] if isinstance(data, list) and data else data
 
+    # image URL builders -----------------------------------------------------
+    def build_network_image_url(self, identifiers: List[str], *, species: int | None = None,
+                                add_color_nodes: int | None = None, add_white_nodes: int | None = None,
+                                required_score: int | None = None, network_type: str = "functional",
+                                network_flavor: str = "evidence", highres: bool = True,
+                                svg: bool = False) -> str:
+        """Build URL for STRING network image."""
+        if not identifiers:
+            raise ValueError("identifiers list cannot be empty")
+        
+        # Use the image endpoint instead of JSON
+        url = f"{self.cfg.version_url}/image/network"
+        params = {
+            "identifiers": "%0d".join(identifiers),
+            "network_type": network_type,
+            "network_flavor": network_flavor,
+            "caller_identity": self.cfg.caller_identity,
+        }
+        
+        if species is not None:
+            params["species"] = species
+        if add_color_nodes is not None:
+            params["add_color_nodes"] = add_color_nodes
+        if add_white_nodes is not None:
+            params["add_white_nodes"] = add_white_nodes
+        if required_score is not None:
+            params["required_score"] = required_score
+        if highres:
+            params["highres"] = 1
+        if svg:
+            params["format"] = "svg"
+        
+        # Build query string
+        query_parts = [f"{k}={v}" for k, v in params.items()]
+        return f"{url}?{'&'.join(query_parts)}"
+
+    def build_enrichment_figure_url(self, identifiers: List[str], species: int,
+                                    category: str = "Process", group_by_similarity: float | None = None,
+                                    color_palette: str | None = None, number_of_term_shown: int | None = None,
+                                    x_axis: str | None = None, highres: bool = False,
+                                    svg: bool = False) -> str:
+        """Build URL for STRING enrichment figure."""
+        if not identifiers:
+            raise ValueError("identifiers list cannot be empty")
+        
+        # Use the image endpoint for enrichment
+        url = f"{self.cfg.version_url}/image/enrichment"
+        params = {
+            "identifiers": "%0d".join(identifiers),
+            "species": species,
+            "category": category,
+            "caller_identity": self.cfg.caller_identity,
+        }
+        
+        if group_by_similarity is not None:
+            params["group_by_similarity"] = group_by_similarity
+        if color_palette is not None:
+            params["color_palette"] = color_palette
+        if number_of_term_shown is not None:
+            params["number_of_term_shown"] = number_of_term_shown
+        if x_axis is not None:
+            params["x_axis"] = x_axis
+        if highres:
+            params["highres"] = 1
+        if svg:
+            params["format"] = "svg"
+        
+        # Build query string
+        query_parts = [f"{k}={v}" for k, v in params.items()]
+        return f"{url}?{'&'.join(query_parts)}"
+
+    def _download_image(self, url: str) -> str:
+        """Download image from URL and return local path."""
+        import os
+        import tempfile
+        from urllib.parse import urlparse
+        
+        # Create a temporary file with appropriate extension
+        parsed_url = urlparse(url)
+        path = parsed_url.path
+        if path.endswith('.svg'):
+            suffix = '.svg'
+        else:
+            suffix = '.png'
+        
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp_file:
+            response = self.session.get(url, timeout=30)
+            response.raise_for_status()
+            tmp_file.write(response.content)
+            return tmp_file.name
+
 
 # ──────────────────────────────────────────────────────────────
 #  Exceptions
@@ -387,8 +478,8 @@ class StringMCPServer:
                     required_score=arguments.get("required_score"),
                     network_type=arguments.get("network_type", "functional"),
                     network_flavor=arguments.get("network_flavor", "evidence"),
-                    highres=arguments.get("highres", False),
-                    svg=arguments.get("svg", False),
+                    highres=arguments.get("highres", True),
+                    svg=arguments.get("svg", True),
                 )
                 if arguments.get("download_image"):
                     local_path = self.bridge._download_image(url)
