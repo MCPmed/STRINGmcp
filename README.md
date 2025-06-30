@@ -463,7 +463,7 @@ Analyze which biological pathways are enriched in this protein set:
 The package can generate protein interaction network visualizations showing evidence-based functional associations.
 
 **Example Network Visualization**: [View Protein Interaction Network](https://string-db.org/api/svg/network?identifiers=9606.ENSP00000269305%0d9606.ENSP00000418960%0d9606.ENSP00000369497%0d9606.ENSP00000278616%0d9606.ENSP00000343741&caller_identity=string_mcp_bridge&species=9606&required_score=400&show_query_node_labels=1)
-
+![DNA Repair Protein Network](https://string-db.org/api/highres_image/network?identifiers=9606.ENSP00000269305%0d9606.ENSP00000418960%0d9606.ENSP00000369497%0d9606.ENSP00000278616%0d9606.ENSP00000343741&caller_identity=string_mcp_bridge&species=9606&required_score=400&show_query_node_labels=1)
 This visualization shows the protein-protein interaction network for TP53, BRCA1, BRCA2, ATM, and ATR with high-confidence interactions (score ≥ 400).
 
 #### 7. Functional Enrichment Visualization
@@ -471,13 +471,13 @@ This visualization shows the protein-protein interaction network for TP53, BRCA1
 The package can also create enrichment scatter plots showing the most significantly enriched biological processes.
 
 **Example Enrichment Visualization**: [View Functional Enrichment Plot](https://string-db.org/api/svg/enrichmentfigure?identifiers=TP53%0dBRCA1%0dBRCA2%0dATM%0dATR&species=9606&caller_identity=string_mcp_bridge&number_of_term_shown=10)
+![Functional Enrichment Plot](https://string-db.org/api/image/enrichmentfigure?identifiers=TP53%0dBRCA1%0dBRCA2%0dATM%0dATR&species=9606&caller_identity=string_mcp_bridge&number_of_term_shown=10)
 
 This visualization displays the top 10 most significantly enriched biological processes and pathways for the DNA repair protein set, showing p-values and gene counts for each enriched term.
 
 ### Summary
 
 This comprehensive analysis demonstrates that the STRING-DB MCP bridge successfully:
-
 - **Identified all 5 DNA repair proteins** with detailed annotations
 - **Discovered 10 high-confidence protein interactions** (all >0.8 score)
 - **Revealed significant pathway enrichments** with p-values < 1e-8
@@ -490,6 +490,5 @@ The results validate these proteins as a core DNA damage response module, with e
 - DNA damage signaling (p = 1.32e-7)
 - Homologous recombination (p = 2.8e-5)
 - p53 signaling pathway (p = 5.44e-5)
-- Breast cancer associations (p = 2.02e-6)
-
+- Breast cancer associations (p = 2.02e-6)v
 This showcases the complete functionality of the STRING-DB MCP bridge for protein interaction network analysis and functional annotation.
