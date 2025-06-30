@@ -16,6 +16,19 @@ Or install from PyPI (when available):
 pip install string-mcp
 ```
 
+## Claude config
+
+```json
+  "mcpServers": {
+    "string-mcp": {
+      "command": "/path/to/python/env/bin/string-mcp-server",
+      "env": {}
+    }
+  }
+}
+```
+
+
 ## Usage
 
 ### MCP Server (Primary Use Case)
